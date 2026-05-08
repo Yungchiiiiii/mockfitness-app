@@ -551,7 +551,12 @@ html, body {
 </div>
 
 <script>
-// ─── Exercise Library ───────────────────────────────────────────
+// ==================== GEMINI API 配置 ====================
+const GEMINI_API_KEY = "AIzaSyB0wqxBbX52qwIgSoQ-jPGxcg0JmkQ2PZE";
+const GEMINI_MODEL = "gemini-1.5-flash";
+// ======================================================
+
+// ── Exercise Library ─────────────────────────────────────
 const LIBRARY = [
   // ==================== 下肢 (lower) ====================
   {name:'單側負重火箭蹲',cat:'lower',tags:['單側穩定性','髖伸展爆發力','股四頭與臀大肌']},
@@ -1284,39 +1289,106 @@ function handleCamFile(input){
   reader.readAsDataURL(input.files[0]);
 }
 
-function analyzeFood(){
-  // Mock Qwen VL Plus API call
-  // Real implementation: POST to https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
-  // with model: "qwen-vl-plus", passing image base64 + text description
-  document.getElementById('cam-analyze-wrap').style.display='none';
-  document.getElementById('cam-loading').style.display='block';
+async function analyzeFood() {
+  const imgEl = document.getElementById('cam-img');
+  const desc = document.getElementById('cam-desc').value.trim();
+  const loading = document.getElementById('cam-loading');
+  const analyzeWrap = document.getElementById('cam-analyze-wrap');
+  const resultDiv = document.getElementById('cam-result');
 
-  const desc=document.getElementById('cam-desc').value.trim();
-  setTimeout(()=>{
-    // Simulated AI response based on description keywords
-    const result=mockQwenAnalysis(desc);
-    document.getElementById('cam-loading').style.display='none';
-    document.getElementById('cam-result').style.display='block';
-    document.getElementById('cam-ai-text').textContent=result.insight;
-    document.getElementById('cam-r-cal').textContent=result.cal;
-    document.getElementById('cam-r-pro').textContent=result.protein;
-    document.getElementById('cam-r-carb').textContent=result.carbs;
-    document.getElementById('cam-r-fat').textContent=result.fat;
-    document.getElementById('cam-name').value=result.name;
-  },1800);
+  if (!imgEl.src || !imgEl.src.startsWith('data:image')) {
+    alert('請先上傳照片');
+    return;
+  }
+
+  analyzeWrap.style.display = 'none';
+  loading.style.display = 'block';
+
+  try {
+    const base64 = imgEl.src.split(',')[1];
+
+    const prompt = `你是一位專業的台灣營養師。請分析這張食物照片，估計一份的熱量與巨集營養素。
+請嚴格用以下 JSON 格式回覆，不要有任何額外文字或 markdown：
+
+{
+  "name": "餐點名稱（用中文）",
+  "cal": 450,
+  "protein": 28,
+  "carbs": 45,
+  "fat": 14,
+  "insight": "簡短的營養建議（1-2句中文）"
 }
 
-function mockQwenAnalysis(desc){
-  // Mock logic - replace with real Qwen VL Plus API response parsing
-  const d=desc.toLowerCase();
-  if(d.includes('牛排')||d.includes('牛肉'))return{name:'牛排餐',cal:580,protein:45,carbs:30,fat:28,insight:'蛋白質豐富的牛排，鐵質充足。建議搭配更多蔬菜提升纖維攝取。'};
-  if(d.includes('雞胸')||d.includes('雞肉'))return{name:'雞胸肉餐',cal:380,protein:42,carbs:25,fat:8,insight:'優質蛋白質來源，脂肪低。是訓練日的理想餐食選擇。'};
-  if(d.includes('沙拉'))return{name:'健康沙拉',cal:320,protein:18,carbs:22,fat:15,insight:'蔬菜豐富，但蛋白質稍低。可加雞胸肉或水煮蛋提升蛋白質含量。'};
-  if(d.includes('拉麵')||d.includes('麵'))return{name:'拉麵',cal:650,protein:22,carbs:85,fat:20,insight:'碳水豐富適合訓練前補充，但鈉含量偏高。訓練後多補水。'};
-  // Default: estimate from image
-  return{name:'今日餐點',cal:450,protein:28,carbs:45,fat:14,insight:'根據圖片分析，這是均衡的一餐。蛋白質和碳水比例適中，適合訓練日補充能量。'};
+${desc ? `額外描述：${desc}` : ''}`;
+
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { text: prompt },
+            {
+              inline_data: {
+                mime_type: "image/jpeg",
+                data: base64
+              }
+            }
+          ]
+        }],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 800
+        }
+      })
+    });
+
+    const data = await response.json();
+
+    if (data.error) {
+      throw new Error(data.error.message);
+    }
+    if (!data.candidates || !data.candidates[0]) {
+      throw new Error('Gemini 沒有回應');
+    }
+
+    let text = data.candidates[0].content.parts[0].text.trim();
+    text = text.replace(/```json\n?/g, '').replace(/```/g, '');
+
+    let result;
+    try {
+      result = JSON.parse(text);
+    } catch (e) {
+      result = mockFallback(text);
+    }
+
+    loading.style.display = 'none';
+    resultDiv.style.display = 'block';
+
+    document.getElementById('cam-ai-text').textContent = result.insight || '分析完成！';
+    document.getElementById('cam-r-cal').textContent = Math.round(result.cal || 450);
+    document.getElementById('cam-r-pro').textContent = Math.round(result.protein || 25);
+    document.getElementById('cam-r-carb').textContent = Math.round(result.carbs || 40);
+    document.getElementById('cam-r-fat').textContent = Math.round(result.fat || 15);
+    document.getElementById('cam-name').value = result.name || 'AI 識別餐點';
+
+  } catch (err) {
+    console.error(err);
+    loading.style.display = 'none';
+    alert('AI 分析失敗：' + err.message + '\n\n請確認 API Key 是否正確，或稍後再試。');
+  }
 }
 
+function mockFallback(text) {
+  return {
+    name: "AI 識別餐點",
+    cal: 450,
+    protein: 28,
+    carbs: 45,
+    fat: 14,
+    insight: text.length > 150 ? text.substring(0, 150) + "..." : text
+  };
+}
 function saveCameraFood(){
   const name=document.getElementById('cam-name').value.trim()||'AI 識別餐點';
   const td=todayStr();
